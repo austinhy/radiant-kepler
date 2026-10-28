@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
 Builds dist/index.html and bundles it into RadiantKepler.app/Contents/Resources/dist/index.html
-so the native macOS desktop app runs at 120fps with zero external runtime dependencies.
+Powered by TradingView's Lightweight Charts for institutional-grade, buttery-smooth 120fps charting.
 """
 import os
 import shutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSS_PATH = os.path.join(ROOT, "src", "styles.css")
+LC_PATH = os.path.join(ROOT, "vendor", "lightweight-charts.standalone.js")
 DIST_DIR = os.path.join(ROOT, "dist")
 APP_RES_DIST = os.path.join(ROOT, "RadiantKepler.app", "Contents", "Resources", "dist")
 
 with open(CSS_PATH, "r", encoding="utf-8") as f:
     styles_css = f.read()
+
+with open(LC_PATH, "r", encoding="utf-8") as f:
+    lc_standalone_js = f.read()
 
 APP_JS = r"""
 (function () {
@@ -684,10 +688,7 @@ APP_JS = r"""
     chartShowVWAP: true,
     chartShowTargets: true,
     chartSubPane: 'RSI',
-    chartVisibleCount: 72,
-    chartPanOffset: 0,
-    chartHoverIdx: null,
-    chartMousePos: null,
+    hudData: {},
     paperSide: 'LONG',
     paperRiskPct: 1.0,
     paperStopLoss: '',
@@ -713,7 +714,7 @@ APP_JS = r"""
     const arr = [];
     let price = base * 0.97;
     let seed = symbol.charCodeAt(0) * 137 + timeframe.charCodeAt(0) * 31;
-    for (let i = 119; i >= 0; i--) {
+    for (let i = 240; i >= 0; i--) {
       seed = (seed * 1664525 + 1013904223) % 4294967296;
       const r1 = seed / 4294967296 - 0.491;
       const chg = price * r1 * 0.013;
@@ -733,7 +734,7 @@ APP_JS = r"""
   async function loadCandles(symbol, timeframe) {
     const coin = COINS.find(c => c.symbol === symbol) || COINS[0];
     try {
-      const url = 'https://data-api.binance.vision/api/v3/klines?symbol=' + coin.binanceSymbol + '&interval=' + timeframe + '&limit=120';
+      const url = 'https://data-api.binance.vision/api/v3/klines?symbol=' + coin.binanceSymbol + '&interval=' + timeframe + '&limit=300';
       const raw = await nativeFetchText(url);
       const data = JSON.parse(raw);
       if (Array.isArray(data) && data.length > 10) {
@@ -758,7 +759,7 @@ APP_JS = r"""
       const raw = await nativeFetchText(url);
       const data = JSON.parse(raw);
       if (Array.isArray(data) && data.length > 10) {
-        state.candles = data.slice(0, 120).reverse().map(row => ({
+        state.candles = data.slice(0, 300).reverse().map(row => ({
           time: Number(row[0]), low: Number(row[1]), high: Number(row[2]),
           open: Number(row[3]), close: Number(row[4]), volume: Number(row[5])
         }));
@@ -884,6 +885,24 @@ APP_JS = r"""
       last.close = price;
       if (price > last.high) last.high = price;
       if (price < last.low) last.low = price;
+
+      // Update TradingView candle in real-time
+      if (tvState.candleSeries) {
+        tvState.candleSeries.update({
+          time: last.time,
+          open: last.open,
+          high: last.high,
+          low: last.low,
+          close: last.close
+        });
+      }
+      if (tvState.volumeSeries) {
+        tvState.volumeSeries.update({
+          time: last.time,
+          value: last.volume,
+          color: last.close >= last.open ? 'rgba(16, 185, 129, 0.28)' : 'rgba(244, 63, 94, 0.28)'
+        });
+      }
     }
 
     checkPaperStopsAndTargets();
@@ -999,260 +1018,378 @@ APP_JS = r"""
     state.paperTakeProfit = pred.takeProfit1.toFixed(dec);
   }
 
-  // --- 8. HIGH-DPI CANVAS CHART RENDERER ---
-  function drawCandlestickCanvas(tech, prediction) {
-    const canvas = document.getElementById('rk-chart-canvas');
-    const wrap = document.getElementById('rk-chart-wrap');
-    if (!canvas || !wrap || !state.candles.length || !tech) return;
+  // --- 8. TRADINGVIEW LIGHTWEIGHT CHARTS INTEGRATION ---
+  const tvState = {
+    mainChart: null,
+    subChart: null,
+    candleSeries: null,
+    volumeSeries: null,
+    ema9: null,
+    ema21: null,
+    ema50: null,
+    vwap: null,
+    bbUpper: null,
+    bbLower: null,
+    priceLines: [],
+    rsiLine: null,
+    macdHist: null,
+    lastSymbol: null,
+    lastTimeframe: null
+  };
 
-    const rect = wrap.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(400, rect.width);
-    const height = Math.max(300, rect.height);
+  function updateHUDBar() {
+    const hud = state.hudData || {};
+    const last = state.candles[state.candles.length - 1] || {};
+    const op = hud.open ?? last.open ?? 0;
+    const hi = hud.high ?? last.high ?? 0;
+    const lo = hud.low ?? last.low ?? 0;
+    const cl = hud.close ?? last.close ?? 0;
+    const chg = hud.changePct ?? (op > 0 ? ((cl - op) / op) * 100 : 0);
 
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    canvas.style.width = width + 'px';
-    canvas.style.height = height + 'px';
+    const hudEl = document.getElementById('rk-chart-hud');
+    if (!hudEl) return;
 
-    const ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
+    hudEl.innerHTML = `
+      ${hud.time ? `<span class="hud-time">${escapeHtml(hud.time)}</span>` : ''}
+      <span>O: <strong>${formatPrice(op)}</strong></span>
+      <span>H: <strong>${formatPrice(hi)}</strong></span>
+      <span>L: <strong>${formatPrice(lo)}</strong></span>
+      <span>C: <strong>${formatPrice(cl)}</strong></span>
+      <span class="${chg >= 0 ? 'pos' : 'neg'}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>
+      <span class="hud-ema9">EMA9: ${formatPrice(hud.ema9 ?? 0)}</span>
+      <span class="hud-ema21">EMA21: ${formatPrice(hud.ema21 ?? 0)}</span>
+      <span class="hud-vwap">VWAP: ${formatPrice(hud.vwap ?? 0)}</span>
+      <span>Vol: ${hud.volume ? Math.round(hud.volume).toLocaleString() : '—'}</span>
+    `;
+  }
 
-    const rightAxisWidth = 84;
-    const bottomAxisHeight = 24;
-    const subChartHeight = 84;
-    const chartWidth = width - rightAxisWidth;
-    const mainHeight = height - bottomAxisHeight - subChartHeight - 10;
-    const subTop = mainHeight + 10;
+  function initOrUpdateTradingView(tech, prediction) {
+    const mainContainer = document.getElementById('tv-main-container');
+    const subContainer = document.getElementById('tv-sub-container');
+    if (!mainContainer || !subContainer || !window.LightweightCharts || !state.candles.length) return;
 
-    ctx.fillStyle = '#090D16';
-    ctx.fillRect(0, 0, width, height);
+    const LC = window.LightweightCharts;
 
-    const candles = state.candles;
-    const count = Math.min(candles.length, Math.max(24, state.chartVisibleCount));
-    const endIdx = Math.max(count, candles.length - state.chartPanOffset);
-    const startIdx = Math.max(0, endIdx - count);
-    const slice = candles.slice(startIdx, endIdx);
-    if (!slice.length) return;
+    // 1. Initialize Main Chart if needed
+    if (!tvState.mainChart) {
+      tvState.mainChart = LC.createChart(mainContainer, {
+        width: mainContainer.clientWidth,
+        height: 380,
+        layout: {
+          background: { type: 'solid', color: '#090D16' },
+          textColor: '#94A3B8',
+          fontSize: 11,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif'
+        },
+        grid: {
+          vertLines: { color: 'rgba(148, 163, 184, 0.05)' },
+          horzLines: { color: 'rgba(148, 163, 184, 0.05)' }
+        },
+        crosshair: {
+          mode: LC.CrosshairMode.Normal,
+          vertLine: { color: 'rgba(226, 232, 240, 0.35)', width: 1, style: LC.LineStyle.Dashed },
+          horzLine: { color: 'rgba(226, 232, 240, 0.35)', width: 1, style: LC.LineStyle.Dashed }
+        },
+        rightPriceScale: {
+          borderColor: 'rgba(148, 163, 184, 0.12)',
+          scaleMargins: { top: 0.08, bottom: 0.22 },
+          autoScale: true
+        },
+        timeScale: {
+          borderColor: 'rgba(148, 163, 184, 0.12)',
+          timeVisible: true,
+          secondsVisible: false
+        }
+      });
 
-    let minPrice = Infinity, maxPrice = -Infinity, maxVol = 0;
-    for (let i = 0; i < slice.length; i++) {
-      const c = slice[i];
-      const gIdx = startIdx + i;
-      if (c.low < minPrice) minPrice = c.low;
-      if (c.high > maxPrice) maxPrice = c.high;
-      if (c.volume > maxVol) maxVol = c.volume;
-      if (state.chartShowBB && tech.bbUpperSeries[gIdx] && tech.bbLowerSeries[gIdx]) {
-        if (tech.bbUpperSeries[gIdx] > maxPrice) maxPrice = tech.bbUpperSeries[gIdx];
-        if (tech.bbLowerSeries[gIdx] < minPrice) minPrice = tech.bbLowerSeries[gIdx];
+      tvState.candleSeries = tvState.mainChart.addCandlestickSeries({
+        upColor: '#10B981',
+        downColor: '#F43F5E',
+        borderVisible: false,
+        wickUpColor: '#10B981',
+        wickDownColor: '#F43F5E'
+      });
+
+      tvState.volumeSeries = tvState.mainChart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: '',
+        scaleMargins: { top: 0.82, bottom: 0 }
+      });
+
+      tvState.ema9 = tvState.mainChart.addLineSeries({
+        color: '#38BDF8',
+        lineWidth: 1.5,
+        crosshairMarkerVisible: false,
+        title: 'EMA 9'
+      });
+
+      tvState.ema21 = tvState.mainChart.addLineSeries({
+        color: '#A855F7',
+        lineWidth: 1.5,
+        crosshairMarkerVisible: false,
+        title: 'EMA 21'
+      });
+
+      tvState.ema50 = tvState.mainChart.addLineSeries({
+        color: '#F59E0B',
+        lineWidth: 1.2,
+        crosshairMarkerVisible: false,
+        title: 'EMA 50'
+      });
+
+      tvState.vwap = tvState.mainChart.addLineSeries({
+        color: '#EAB308',
+        lineWidth: 1.5,
+        lineStyle: LC.LineStyle.Dashed,
+        crosshairMarkerVisible: false,
+        title: 'VWAP'
+      });
+
+      tvState.bbUpper = tvState.mainChart.addLineSeries({
+        color: 'rgba(56, 189, 248, 0.45)',
+        lineWidth: 1,
+        lineStyle: LC.LineStyle.Dotted,
+        crosshairMarkerVisible: false,
+        title: 'BB Upper'
+      });
+
+      tvState.bbLower = tvState.mainChart.addLineSeries({
+        color: 'rgba(56, 189, 248, 0.45)',
+        lineWidth: 1,
+        lineStyle: LC.LineStyle.Dotted,
+        crosshairMarkerVisible: false,
+        title: 'BB Lower'
+      });
+
+      tvState.mainChart.subscribeCrosshairMove((param) => {
+        if (!param || !param.time || !param.seriesData) return;
+        const cD = param.seriesData.get(tvState.candleSeries);
+        const vD = param.seriesData.get(tvState.volumeSeries);
+        const e9 = param.seriesData.get(tvState.ema9);
+        const e21 = param.seriesData.get(tvState.ema21);
+        const vw = param.seriesData.get(tvState.vwap);
+        if (cD) {
+          const chg = cD.open > 0 ? ((cD.close - cD.open) / cD.open) * 100 : 0;
+          const tStr = typeof param.time === 'number'
+            ? new Date(param.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : String(param.time);
+
+          state.hudData = {
+            time: tStr,
+            open: cD.open,
+            high: cD.high,
+            low: cD.low,
+            close: cD.close,
+            changePct: chg,
+            volume: vD ? vD.value : undefined,
+            ema9: e9 ? e9.value : undefined,
+            ema21: e21 ? e21.value : undefined,
+            vwap: vw ? vw.value : undefined
+          };
+          updateHUDBar();
+        }
+      });
+
+      window.addEventListener('resize', () => {
+        if (mainContainer && tvState.mainChart) {
+          tvState.mainChart.applyOptions({ width: mainContainer.clientWidth });
+        }
+      });
+    }
+
+    // 2. Initialize Sub Chart if needed
+    if (!tvState.subChart) {
+      tvState.subChart = LC.createChart(subContainer, {
+        width: subContainer.clientWidth,
+        height: 105,
+        layout: {
+          background: { type: 'solid', color: '#070A12' },
+          textColor: '#64748B',
+          fontSize: 10,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif'
+        },
+        grid: {
+          vertLines: { color: 'rgba(148, 163, 184, 0.04)' },
+          horzLines: { color: 'rgba(148, 163, 184, 0.04)' }
+        },
+        crosshair: { mode: LC.CrosshairMode.Normal },
+        rightPriceScale: {
+          borderColor: 'rgba(148, 163, 184, 0.12)',
+          scaleMargins: { top: 0.15, bottom: 0.15 },
+          autoScale: true
+        },
+        timeScale: {
+          borderColor: 'rgba(148, 163, 184, 0.12)',
+          visible: false
+        }
+      });
+
+      // Synchronize time scales
+      tvState.mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (tvState.subChart && range) tvState.subChart.timeScale().setVisibleLogicalRange(range);
+      });
+      tvState.subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (tvState.mainChart && range) tvState.mainChart.timeScale().setVisibleLogicalRange(range);
+      });
+
+      window.addEventListener('resize', () => {
+        if (subContainer && tvState.subChart) {
+          tvState.subChart.applyOptions({ width: subContainer.clientWidth });
+        }
+      });
+    }
+
+    // 3. Prepare strictly ascending sorted candles
+    const sorted = [...state.candles].sort((a, b) => a.time - b.time);
+    const uniqueCandles = [];
+    const seenTimes = new Set();
+    for (let i = 0; i < sorted.length; i++) {
+      const c = sorted[i];
+      if (!seenTimes.has(c.time)) {
+        seenTimes.add(c.time);
+        uniqueCandles.push(c);
       }
     }
-    if (state.chartShowTargets && state.chartPanOffset === 0) {
-      maxPrice = Math.max(maxPrice, prediction.takeProfit1, prediction.stopLoss);
-      minPrice = Math.min(minPrice, prediction.takeProfit1, prediction.stopLoss);
+
+    tvState.candleSeries.setData(uniqueCandles.map(c => ({
+      time: c.time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close
+    })));
+
+    tvState.volumeSeries.setData(uniqueCandles.map(c => ({
+      time: c.time,
+      value: c.volume,
+      color: c.close >= c.open ? 'rgba(16, 185, 129, 0.28)' : 'rgba(244, 63, 94, 0.28)'
+    })));
+
+    // Indicator series
+    if (tvState.ema9) {
+      tvState.ema9.setData(state.chartShowEMA ? uniqueCandles.map((c, i) => ({ time: c.time, value: tech.ema9Series[i] || c.close })) : []);
+    }
+    if (tvState.ema21) {
+      tvState.ema21.setData(state.chartShowEMA ? uniqueCandles.map((c, i) => ({ time: c.time, value: tech.ema21Series[i] || c.close })) : []);
+    }
+    if (tvState.ema50) {
+      tvState.ema50.setData(state.chartShowEMA ? uniqueCandles.map((c, i) => ({ time: c.time, value: tech.ema50Series[i] || c.close })) : []);
+    }
+    if (tvState.vwap) {
+      tvState.vwap.setData(state.chartShowVWAP ? uniqueCandles.map((c, i) => ({ time: c.time, value: tech.vwapSeries[i] || c.close })) : []);
+    }
+    if (tvState.bbUpper && tvState.bbLower) {
+      tvState.bbUpper.setData(state.chartShowBB ? uniqueCandles.map((c, i) => ({ time: c.time, value: tech.bbUpperSeries[i] || c.close })) : []);
+      tvState.bbLower.setData(state.chartShowBB ? uniqueCandles.map((c, i) => ({ time: c.time, value: tech.bbLowerSeries[i] || c.close })) : []);
     }
 
-    const pad = (maxPrice - minPrice) * 0.08 || maxPrice * 0.01;
-    minPrice -= pad;
-    maxPrice += pad;
-    const priceSpan = Math.max(maxPrice - minPrice, 0.000001);
+    // AI Prediction Price Lines
+    for (let i = 0; i < tvState.priceLines.length; i++) {
+      tvState.candleSeries.removePriceLine(tvState.priceLines[i]);
+    }
+    tvState.priceLines = [];
 
-    const priceToY = (p) => 12 + ((maxPrice - p) / priceSpan) * (mainHeight - 24);
-    const yToPrice = (y) => maxPrice - ((y - 12) / (mainHeight - 24)) * priceSpan;
-    const stepX = chartWidth / slice.length;
-    const idxToX = (i) => (i + 0.5) * stepX;
-
-    // Grid
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.07)';
-    ctx.lineWidth = 1;
-    ctx.font = '11px "SF Mono", Menlo, monospace';
-    ctx.fillStyle = '#64748B';
-    for (let i = 0; i <= 6; i++) {
-      const y = 12 + ((mainHeight - 24) / 6) * i;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(chartWidth, y);
-      ctx.stroke();
-      ctx.fillText(formatPrice(yToPrice(y)).replace('$', ''), chartWidth + 8, y + 4);
+    if (state.chartShowTargets && prediction && prediction.takeProfit1) {
+      const tp1 = tvState.candleSeries.createPriceLine({
+        price: prediction.takeProfit1,
+        color: '#10B981',
+        lineWidth: 1.5,
+        lineStyle: LC.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: 'TP1 (' + (prediction.expectedMovePct > 0 ? '+' : '') + prediction.expectedMovePct + '%)'
+      });
+      const sl = tvState.candleSeries.createPriceLine({
+        price: prediction.stopLoss,
+        color: '#F43F5E',
+        lineWidth: 1.5,
+        lineStyle: LC.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: 'STOP / INVALIDATION'
+      });
+      const tp2 = tvState.candleSeries.createPriceLine({
+        price: prediction.takeProfit2,
+        color: '#34D399',
+        lineWidth: 1,
+        lineStyle: LC.LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: 'TP2 (Runner)'
+      });
+      tvState.priceLines = [tp1, sl, tp2];
     }
 
-    const tStep = Math.max(1, Math.floor(slice.length / 6));
-    for (let i = 0; i < slice.length; i += tStep) {
-      const x = idxToX(i);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height - bottomAxisHeight);
-      ctx.stroke();
-      const dt = new Date(slice[i].time * 1000);
-      const lbl = state.timeframe === '1d'
-        ? dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-        : dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-      ctx.fillStyle = '#64748B';
-      ctx.fillText(lbl, Math.max(4, x - 18), height - 7);
+    // 4. Update Sub-Chart (RSI or MACD)
+    if (tvState.rsiLine) {
+      tvState.subChart.removeSeries(tvState.rsiLine);
+      tvState.rsiLine = null;
+    }
+    if (tvState.macdHist) {
+      tvState.subChart.removeSeries(tvState.macdHist);
+      tvState.macdHist = null;
     }
 
-    // Bollinger Bands
-    if (state.chartShowBB && tech.bbUpperSeries.length >= endIdx) {
-      ctx.save();
-      ctx.beginPath();
-      for (let i = 0; i < slice.length; i++) {
-        const x = idxToX(i), y = priceToY(tech.bbUpperSeries[startIdx + i]);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      for (let i = slice.length - 1; i >= 0; i--) {
-        ctx.lineTo(idxToX(i), priceToY(tech.bbLowerSeries[startIdx + i]));
-      }
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(56, 189, 248, 0.05)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
-      ctx.beginPath();
-      for (let i = 0; i < slice.length; i++) {
-        const x = idxToX(i), y = priceToY(tech.bbUpperSeries[startIdx + i]);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-      ctx.beginPath();
-      for (let i = 0; i < slice.length; i++) {
-        const x = idxToX(i), y = priceToY(tech.bbLowerSeries[startIdx + i]);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Volume bars
-    const volMaxH = mainHeight * 0.18;
-    for (let i = 0; i < slice.length; i++) {
-      const c = slice[i];
-      const x = idxToX(i);
-      const bw = Math.max(2, stepX * 0.62);
-      const bh = maxVol > 0 ? (c.volume / maxVol) * volMaxH : 0;
-      ctx.fillStyle = c.close >= c.open ? 'rgba(16, 185, 129, 0.18)' : 'rgba(244, 63, 94, 0.18)';
-      ctx.fillRect(x - bw / 2, mainHeight - bh, bw, bh);
-    }
-
-    // Candlesticks
-    for (let i = 0; i < slice.length; i++) {
-      const c = slice[i];
-      const x = idxToX(i);
-      const isUp = c.close >= c.open;
-      const color = isUp ? '#10B981' : '#F43F5E';
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(x, priceToY(c.high));
-      ctx.lineTo(x, priceToY(c.low));
-      ctx.stroke();
-
-      const oY = priceToY(c.open), cY = priceToY(c.close);
-      const top = Math.min(oY, cY);
-      const bh = Math.max(1.8, Math.abs(cY - oY));
-      const bw = Math.max(2.5, Math.min(14, stepX * 0.68));
-      ctx.fillStyle = color;
-      ctx.fillRect(x - bw / 2, top, bw, bh);
-    }
-
-    const drawSeries = (series, color, lw, dashed) => {
-      if (series.length < endIdx) return;
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lw;
-      if (dashed) ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      for (let i = 0; i < slice.length; i++) {
-        const x = idxToX(i), y = priceToY(series[startIdx + i]);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-      ctx.restore();
-    };
-
-    if (state.chartShowEMA) {
-      drawSeries(tech.ema9Series, '#38BDF8', 1.6, false);
-      drawSeries(tech.ema21Series, '#A855F7', 1.6, false);
-      drawSeries(tech.ema50Series, '#F59E0B', 1.3, false);
-    }
-    if (state.chartShowVWAP) {
-      drawSeries(tech.vwapSeries, '#EAB308', 1.4, true);
-    }
-
-    const drawLevel = (pVal, label, color, bg) => {
-      if (pVal < minPrice || pVal > maxPrice) return;
-      const y = priceToY(pVal);
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.2;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(chartWidth, y);
-      ctx.stroke();
-      ctx.fillStyle = bg;
-      ctx.fillRect(chartWidth + 2, y - 9, rightAxisWidth - 4, 18);
-      ctx.fillStyle = '#FFF';
-      ctx.font = 'bold 10px "SF Mono", monospace';
-      ctx.fillText(formatPrice(pVal).replace('$', ''), chartWidth + 6, y + 3);
-      const tw = ctx.measureText(label).width + 12;
-      ctx.fillStyle = bg;
-      ctx.fillRect(chartWidth - tw - 8, y - 10, tw, 18);
-      ctx.fillStyle = '#FFF';
-      ctx.fillText(label, chartWidth - tw - 2, y + 3);
-      ctx.restore();
-    };
-
-    if (state.chartShowTargets) {
-      drawLevel(prediction.takeProfit1, 'TP1 (' + (prediction.expectedMovePct > 0 ? '+' : '') + prediction.expectedMovePct + '%)', '#10B981', 'rgba(16, 185, 129, 0.86)');
-      drawLevel(prediction.stopLoss, 'STOP / INVALIDATION', '#F43F5E', 'rgba(244, 63, 94, 0.86)');
-    }
-    drawLevel(slice[slice.length - 1].close, 'LIVE', '#6366F1', '#4F46E5');
-
-    // Sub-pane
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.16)';
-    ctx.beginPath();
-    ctx.moveTo(0, subTop);
-    ctx.lineTo(width, subTop);
-    ctx.stroke();
-
-    ctx.save();
-    ctx.fillStyle = '#94A3B8';
-    ctx.font = 'bold 10px -apple-system, sans-serif';
     if (state.chartSubPane === 'RSI') {
-      ctx.fillText('RSI (14): ' + tech.rsi14.toFixed(1), 10, subTop + 14);
-      const rsiToY = (r) => subTop + 10 + ((100 - r) / 100) * (subChartHeight - 18);
-      ctx.strokeStyle = 'rgba(244, 63, 94, 0.25)';
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(0, rsiToY(70)); ctx.lineTo(chartWidth, rsiToY(70)); ctx.stroke();
-      ctx.strokeStyle = 'rgba(16, 185, 129, 0.25)';
-      ctx.beginPath(); ctx.moveTo(0, rsiToY(30)); ctx.lineTo(chartWidth, rsiToY(30)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.strokeStyle = '#38BDF8';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      for (let i = 0; i < slice.length; i++) {
-        const x = idxToX(i), y = rsiToY(tech.rsiSeries[startIdx + i] || 50);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
+      tvState.rsiLine = tvState.subChart.addLineSeries({
+        color: '#38BDF8',
+        lineWidth: 1.5,
+        title: 'RSI (14)'
+      });
+      tvState.rsiLine.createPriceLine({
+        price: 70,
+        color: 'rgba(244, 63, 94, 0.4)',
+        lineWidth: 1,
+        lineStyle: LC.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: '70'
+      });
+      tvState.rsiLine.createPriceLine({
+        price: 30,
+        color: 'rgba(16, 185, 129, 0.4)',
+        lineWidth: 1,
+        lineStyle: LC.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: '30'
+      });
+      tvState.rsiLine.setData(uniqueCandles.map((c, i) => ({
+        time: c.time,
+        value: tech.rsiSeries[i] || 50
+      })));
     } else {
-      ctx.fillText('MACD Histogram: ' + tech.macd.histogram.toFixed(4), 10, subTop + 14);
-      const hSlice = slice.map((_, i) => tech.macdHistSeries[startIdx + i] || 0);
-      const maxAbs = Math.max.apply(null, hSlice.map(v => Math.abs(v)).concat([0.00001]));
-      const midY = subTop + subChartHeight / 2 + 4;
-      for (let i = 0; i < slice.length; i++) {
-        const val = hSlice[i];
-        const x = idxToX(i);
-        const h = (val / maxAbs) * (subChartHeight * 0.38);
-        const bw = Math.max(2, stepX * 0.6);
-        ctx.fillStyle = val >= 0 ? 'rgba(16, 185, 129, 0.65)' : 'rgba(244, 63, 94, 0.65)';
-        ctx.fillRect(x - bw / 2, val >= 0 ? midY - h : midY, bw, Math.abs(h));
-      }
+      tvState.macdHist = tvState.subChart.addHistogramSeries({
+        title: 'MACD Histogram'
+      });
+      tvState.macdHist.setData(uniqueCandles.map((c, i) => {
+        const val = tech.macdHistSeries[i] || 0;
+        return {
+          time: c.time,
+          value: val,
+          color: val >= 0 ? 'rgba(16, 185, 129, 0.75)' : 'rgba(244, 63, 94, 0.75)'
+        };
+      }));
     }
-    ctx.restore();
+
+    // Fit content if symbol or timeframe changed
+    if (tvState.lastSymbol !== state.selectedSymbol || tvState.lastTimeframe !== state.timeframe) {
+      tvState.mainChart.timeScale().fitContent();
+      tvState.lastSymbol = state.selectedSymbol;
+      tvState.lastTimeframe = state.timeframe;
+    }
+
+    // Update HUD defaults
+    const lastC = uniqueCandles[uniqueCandles.length - 1];
+    state.hudData = {
+      open: lastC?.open,
+      high: lastC?.high,
+      low: lastC?.low,
+      close: lastC?.close,
+      volume: lastC?.volume,
+      ema9: tech.ema9,
+      ema21: tech.ema21,
+      vwap: tech.vwap
+    };
+    updateHUDBar();
   }
 
   function updateFastDOMOnTick(sym) {
-    // Fast targeted DOM update for ticking price & chart without destroying inputs
     const watchPriceEl = document.getElementById('watch-price-' + sym);
     const watchChgEl = document.getElementById('watch-chg-' + sym);
     const t = state.tickers[sym];
@@ -1269,8 +1406,7 @@ APP_JS = r"""
     if (sym === state.selectedSymbol && state.activeTab === 'DASHBOARD') {
       const heroPriceEl = document.getElementById('rk-hero-price');
       if (heroPriceEl && t) heroPriceEl.textContent = formatPrice(t.price);
-      const { tech, pred } = getActivePrediction();
-      drawCandlestickCanvas(tech, pred);
+      updateHUDBar();
     }
   }
 
@@ -1653,20 +1789,14 @@ APP_JS = r"""
                   <button class="ind-chip ${state.chartShowVWAP ? 'on' : ''}" data-toggle="vwap"><span class="dot vwap-dot"></span> VWAP</button>
                   <button class="ind-chip ${state.chartShowTargets ? 'on' : ''}" data-toggle="targets"><span class="dot target-dot"></span> AI Targets</button>
                   <button class="ind-chip on" data-toggle="subpane">Oscillator: ${state.chartSubPane}</button>
+                  <button class="ind-chip reset-btn" data-action="fit-chart">Fit View</button>
+                  <button class="ind-chip reset-btn" data-action="live-edge">Live Edge ▸</button>
                 </div>
               </div>
-              <div class="chart-hud-bar">
-                <span>O: <strong>${formatPrice(state.candles[state.candles.length - 1].open)}</strong></span>
-                <span>H: <strong>${formatPrice(state.candles[state.candles.length - 1].high)}</strong></span>
-                <span>L: <strong>${formatPrice(state.candles[state.candles.length - 1].low)}</strong></span>
-                <span>C: <strong>${formatPrice(state.candles[state.candles.length - 1].close)}</strong></span>
-                <span class="hud-ema9">EMA9: ${formatPrice(tech.ema9)}</span>
-                <span class="hud-ema21">EMA21: ${formatPrice(tech.ema21)}</span>
-                <span class="hud-vwap">VWAP: ${formatPrice(tech.vwap)}</span>
-                <span>ATR(14): ${formatPrice(tech.atr14)}</span>
-              </div>
-              <div class="chart-canvas-wrap" id="rk-chart-wrap">
-                <canvas id="rk-chart-canvas"></canvas>
+              <div class="chart-hud-bar" id="rk-chart-hud"></div>
+              <div class="tv-chart-wrapper">
+                <div id="tv-main-container" class="tv-main-chart"></div>
+                <div id="tv-sub-container" class="tv-sub-chart"></div>
               </div>
             </div>
 
@@ -1796,16 +1926,11 @@ APP_JS = r"""
     `;
 
     if (state.activeTab === 'DASHBOARD') {
-      drawCandlestickCanvas(tech, pred);
-      const wrap = document.getElementById('rk-chart-wrap');
-      if (wrap) {
-        wrap.onwheel = (e) => {
-          e.preventDefault();
-          const delta = e.deltaY > 0 ? 8 : -8;
-          state.chartVisibleCount = clamp(state.chartVisibleCount + delta, 24, state.candles.length);
-          drawCandlestickCanvas(tech, pred);
-        };
-      }
+      initOrUpdateTradingView(tech, pred);
+    } else {
+      // Clear chart instances when leaving dashboard so they recreate properly
+      tvState.mainChart = null;
+      tvState.subChart = null;
     }
 
     const searchForm = document.getElementById('rk-web-search-form');
@@ -1865,7 +1990,17 @@ APP_JS = r"""
       if (t === 'vwap') state.chartShowVWAP = !state.chartShowVWAP;
       if (t === 'targets') state.chartShowTargets = !state.chartShowTargets;
       if (t === 'subpane') state.chartSubPane = state.chartSubPane === 'RSI' ? 'MACD' : 'RSI';
+      const { tech, pred } = getActivePrediction();
+      initOrUpdateTradingView(tech, pred);
       renderAll();
+      return;
+    }
+    if (btn.dataset.action === 'fit-chart') {
+      if (tvState.mainChart) tvState.mainChart.timeScale().fitContent();
+      return;
+    }
+    if (btn.dataset.action === 'live-edge') {
+      if (tvState.mainChart) tvState.mainChart.timeScale().scrollToRealTime();
       return;
     }
     if (btn.dataset.filter) {
@@ -1961,13 +2096,6 @@ APP_JS = r"""
     }
   });
 
-  window.addEventListener('resize', () => {
-    if (state.activeTab === 'DASHBOARD') {
-      const { tech, pred } = getActivePrediction();
-      drawCandlestickCanvas(tech, pred);
-    }
-  });
-
   // Boot
   syncPaperInputsToPrediction();
   renderAll();
@@ -1992,6 +2120,9 @@ HTML_CONTENT = f"""<!doctype html>
   <body>
     <div id="root"></div>
     <script>
+{lc_standalone_js}
+    </script>
+    <script>
 {APP_JS}
     </script>
   </body>
@@ -2007,4 +2138,4 @@ shutil.copyfile(
     os.path.join(DIST_DIR, "index.html"),
     os.path.join(APP_RES_DIST, "index.html"),
 )
-print("Successfully built dist/index.html and bundled into RadiantKepler.app!")
+print("Successfully built dist/index.html with TradingView Lightweight Charts!")

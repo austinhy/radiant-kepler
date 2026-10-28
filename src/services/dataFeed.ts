@@ -107,7 +107,7 @@ export async function fetchCandles(
   // Try 1: Binance Vision Public Market Data API (Global & US accessible, fast & accurate)
   try {
     const interval = BINANCE_INTERVAL_MAP[timeframe];
-    const url = `https://data-api.binance.vision/api/v3/klines?symbol=${meta.binanceSymbol}&interval=${interval}&limit=120`;
+    const url = `https://data-api.binance.vision/api/v3/klines?symbol=${meta.binanceSymbol}&interval=${interval}&limit=300`;
     const rawText = await nativeFetchText(url);
     const data = JSON.parse(rawText);
     if (Array.isArray(data) && data.length > 10) {
@@ -132,7 +132,7 @@ export async function fetchCandles(
     const data = JSON.parse(rawText);
     if (Array.isArray(data) && data.length > 10) {
       return data
-        .slice(0, 120)
+        .slice(0, 300)
         .reverse()
         .map((row: number[]) => ({
           time: Number(row[0]),
@@ -174,7 +174,7 @@ export function generateFallbackCandles(
   let price = base * 0.965;
   let seed = symbol.charCodeAt(0) * 137 + timeframe.charCodeAt(0) * 31;
 
-  for (let i = 119; i >= 0; i--) {
+  for (let i = 240; i >= 0; i--) {
     seed = (seed * 1664525 + 1013904223) % 4294967296;
     const r1 = seed / 4294967296 - 0.492;
     const change = price * r1 * 0.014;

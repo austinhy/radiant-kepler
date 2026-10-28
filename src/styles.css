@@ -479,6 +479,32 @@ input {
   cursor: crosshair;
 }
 
+.tv-chart-wrapper {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  position: relative;
+  background: #090D16;
+}
+
+.tv-main-chart {
+  width: 100%;
+  height: 380px;
+  position: relative;
+}
+
+.tv-sub-chart {
+  width: 100%;
+  height: 105px;
+  position: relative;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.hud-time {
+  color: var(--accent-cyan);
+  font-weight: 700;
+}
+
 /* Prediction Card */
 .prediction-card,
 .scanner-panel,
