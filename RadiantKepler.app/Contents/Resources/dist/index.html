@@ -3195,120 +3195,175 @@ input {
     `;
   }
 
-  function renderAll() {
-    const root = document.getElementById('root');
-    if (!root) return;
-
-    const { tech, pred, livePrice } = getActivePrediction();
+  function renderHeroBarHTML() {
+    const { tech, livePrice } = getActivePrediction();
     const curTicker = state.tickers[state.selectedSymbol] || { name: state.selectedSymbol, changePct24h: 0, high24h: livePrice, low24h: livePrice };
-    const openCount = state.positions.filter(p => !p.closedAt).length;
+    return `
+      <div class="hero-left">
+        <h2>${escapeHtml(curTicker.name)} <span>(${state.selectedSymbol}/USD)</span></h2>
+        <div class="hero-price-row">
+          <span class="hero-price" id="rk-hero-price">${formatPrice(livePrice)}</span>
+          <span class="hero-chg ${curTicker.changePct24h >= 0 ? 'pos' : 'neg'}" id="rk-hero-chg">
+            ${curTicker.changePct24h >= 0 ? '▲ +' : '▼ '}${curTicker.changePct24h.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <div><small>24h High</small><strong id="rk-hero-high">${formatPrice(curTicker.high24h || livePrice)}</strong></div>
+        <div><small>24h Low</small><strong id="rk-hero-low">${formatPrice(curTicker.low24h || livePrice)}</strong></div>
+        <div><small>RSI (14)</small><strong class="${tech.rsi14 > 70 ? 'neg' : tech.rsi14 < 30 ? 'pos' : ''}">${tech.rsi14.toFixed(1)}</strong></div>
+        <div><small>Buy Pressure</small><strong class="${tech.buyPressurePct >= 52 ? 'pos' : tech.buyPressurePct <= 48 ? 'neg' : ''}">${tech.buyPressurePct.toFixed(0)}%</strong></div>
+        <div><small>Support / Res</small><strong>${formatPrice(tech.support)} / ${formatPrice(tech.resistance)}</strong></div>
+      </div>
+    `;
+  }
 
-    let mainViewHTML = '';
-    if (state.activeTab === 'DASHBOARD') {
-      mainViewHTML = `
-        <main class="dashboard-grid">
-          <div class="center-column">
-            <div class="coin-hero-bar">
-              <div class="hero-left">
-                <h2>${escapeHtml(curTicker.name)} <span>(${state.selectedSymbol}/USD)</span></h2>
-                <div class="hero-price-row">
-                  <span class="hero-price" id="rk-hero-price">${formatPrice(livePrice)}</span>
-                  <span class="hero-chg ${curTicker.changePct24h >= 0 ? 'pos' : 'neg'}">
-                    ${curTicker.changePct24h >= 0 ? '▲ +' : '▼ '}${curTicker.changePct24h.toFixed(2)}%
-                  </span>
-                </div>
-              </div>
-              <div class="hero-stats">
-                <div><small>24h High</small><strong>${formatPrice(curTicker.high24h || livePrice)}</strong></div>
-                <div><small>24h Low</small><strong>${formatPrice(curTicker.low24h || livePrice)}</strong></div>
-                <div><small>RSI (14)</small><strong class="${tech.rsi14 > 70 ? 'neg' : tech.rsi14 < 30 ? 'pos' : ''}">${tech.rsi14.toFixed(1)}</strong></div>
-                <div><small>Buy Pressure</small><strong class="${tech.buyPressurePct >= 52 ? 'pos' : tech.buyPressurePct <= 48 ? 'neg' : ''}">${tech.buyPressurePct.toFixed(0)}%</strong></div>
-                <div><small>Support / Res</small><strong>${formatPrice(tech.support)} / ${formatPrice(tech.resistance)}</strong></div>
-              </div>
+  function renderChartToolbarHTML() {
+    return `
+      <div class="timeframe-group">
+        ${['1m', '5m', '15m', '1h', '4h', '1d'].map(tf => `<button type="button" class="tf-btn ${state.timeframe === tf ? 'active' : ''}" data-tf="${tf}">${tf.toUpperCase()}</button>`).join('')}
+      </div>
+      <div class="indicator-toggles">
+        <button type="button" class="ind-chip ${state.chartShowEMA ? 'on' : ''}" data-toggle="ema"><span class="dot ema-dot"></span> EMA 9/21/50</button>
+        <button type="button" class="ind-chip ${state.chartShowBB ? 'on' : ''}" data-toggle="bb"><span class="dot bb-dot"></span> Bollinger</button>
+        <button type="button" class="ind-chip ${state.chartShowVWAP ? 'on' : ''}" data-toggle="vwap"><span class="dot vwap-dot"></span> VWAP</button>
+        <button type="button" class="ind-chip ${state.chartShowTargets ? 'on' : ''}" data-toggle="targets"><span class="dot target-dot"></span> AI Targets</button>
+        <button type="button" class="ind-chip on" data-toggle="subpane">Oscillator: ${state.chartSubPane}</button>
+        <button type="button" class="ind-chip reset-btn" data-action="fit-chart">Fit View</button>
+        <button type="button" class="ind-chip reset-btn" data-action="live-edge">Live Edge ▸</button>
+      </div>
+    `;
+  }
+
+  function renderWatchlistItemsHTML() {
+    return COINS.map(coin => {
+      const t = state.tickers[coin.symbol] || { price: 0, changePct24h: 0 };
+      const isPos = t.changePct24h >= 0;
+      return `
+        <button type="button" class="watch-item ${coin.symbol === state.selectedSymbol ? 'selected' : ''}" data-watch-coin="${coin.symbol}">
+          <div class="watch-left">
+            <span class="coin-badge-dot" style="background:${coin.color}"></span>
+            <div>
+              <div class="watch-sym">${coin.symbol}</div>
+              <div class="watch-name">${coin.name}</div>
             </div>
-
-            <div class="chart-panel">
-              <div class="chart-toolbar">
-                <div class="timeframe-group">
-                  ${['1m', '5m', '15m', '1h', '4h', '1d'].map(tf => `<button class="tf-btn ${state.timeframe === tf ? 'active' : ''}" data-tf="${tf}">${tf.toUpperCase()}</button>`).join('')}
-                </div>
-                <div class="indicator-toggles">
-                  <button class="ind-chip ${state.chartShowEMA ? 'on' : ''}" data-toggle="ema"><span class="dot ema-dot"></span> EMA 9/21/50</button>
-                  <button class="ind-chip ${state.chartShowBB ? 'on' : ''}" data-toggle="bb"><span class="dot bb-dot"></span> Bollinger</button>
-                  <button class="ind-chip ${state.chartShowVWAP ? 'on' : ''}" data-toggle="vwap"><span class="dot vwap-dot"></span> VWAP</button>
-                  <button class="ind-chip ${state.chartShowTargets ? 'on' : ''}" data-toggle="targets"><span class="dot target-dot"></span> AI Targets</button>
-                  <button class="ind-chip on" data-toggle="subpane">Oscillator: ${state.chartSubPane}</button>
-                  <button class="ind-chip reset-btn" data-action="fit-chart">Fit View</button>
-                  <button class="ind-chip reset-btn" data-action="live-edge">Live Edge ▸</button>
-                </div>
-              </div>
-              <div class="chart-hud-bar" id="rk-chart-hud"></div>
-              <div class="tv-chart-wrapper">
-                <div id="tv-main-container" class="tv-main-chart"></div>
-                <div id="tv-sub-container" class="tv-sub-chart"></div>
-              </div>
-            </div>
-
-            ${renderPaperTraderHTML(pred, livePrice)}
           </div>
-
-          <div class="right-column">
-            ${renderPredictionCardHTML(pred)}
-            ${renderInternetScannerHTML()}
+          <div class="watch-right">
+            <div class="watch-price" id="watch-price-${coin.symbol}">${formatPrice(t.price)}</div>
+            <div class="watch-chg ${isPos ? 'pos' : 'neg'}" id="watch-chg-${coin.symbol}">${isPos ? '+' : ''}${t.changePct24h.toFixed(2)}%</div>
           </div>
-        </main>
+        </button>
       `;
-    } else if (state.activeTab === 'RADAR') {
-      mainViewHTML = `
-        <main class="full-tab-view">
-          <div class="radar-panel">
-            <div class="pred-header">
-              <div>
-                <div class="pred-eyebrow">CROSS-MARKET QUANTITATIVE & INTERNET SENTIMENT MATRIX</div>
-                <h3 class="pred-title">All-Coin Good-Faith Opportunity Radar</h3>
-              </div>
-            </div>
-            <table class="radar-table">
-              <thead>
+    }).join('');
+  }
+
+  function renderRadarHTML() {
+    return `
+      <div class="radar-panel">
+        <div class="pred-header">
+          <div>
+            <div class="pred-eyebrow">CROSS-MARKET QUANTITATIVE & INTERNET SENTIMENT MATRIX</div>
+            <h3 class="pred-title">All-Coin Good-Faith Opportunity Radar</h3>
+          </div>
+        </div>
+        <table class="radar-table">
+          <thead>
+            <tr>
+              <th>Asset</th>
+              <th>Live Price</th>
+              <th>24h Change</th>
+              <th>Internet Mentions</th>
+              <th>Net Web Sentiment</th>
+              <th>Suggested Bias</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${COINS.map(c => {
+              const t = state.tickers[c.symbol] || { price: 0, changePct24h: 0 };
+              const cats = state.catalysts.filter(x => x.affectedCoins.includes(c.symbol));
+              const avgS = cats.length ? Math.round(cats.reduce((s, x) => s + x.sentimentScore, 0) / cats.length) : 0;
+              const comb = Math.round(t.changePct24h * 4.5 + avgS * 0.65);
+              const dir = comb >= 18 ? 'BULLISH BIAS' : comb <= -18 ? 'BEARISH BIAS' : 'NEUTRAL / RANGE';
+              return `
                 <tr>
-                  <th>Asset</th>
-                  <th>Live Price</th>
-                  <th>24h Change</th>
-                  <th>Internet Mentions</th>
-                  <th>Net Web Sentiment</th>
-                  <th>Suggested Bias</th>
-                  <th>Action</th>
+                  <td><strong>${c.symbol}</strong> <span style="color:#64748b">${c.name}</span></td>
+                  <td class="mono">${formatPrice(t.price)}</td>
+                  <td class="mono ${t.changePct24h >= 0 ? 'pos' : 'neg'}">${t.changePct24h >= 0 ? '+' : ''}${t.changePct24h.toFixed(2)}%</td>
+                  <td>${cats.length} articles/posts</td>
+                  <td class="mono ${avgS > 5 ? 'pos' : avgS < -5 ? 'neg' : ''}">${avgS > 0 ? '+' : ''}${avgS}</td>
+                  <td><span class="sent-badge ${comb >= 18 ? 'bull' : comb <= -18 ? 'bear' : 'neutral'}">${dir}</span></td>
+                  <td><button type="button" class="tf-btn active" data-radar-coin="${c.symbol}">Inspect Chart & Thesis ▸</button></td>
                 </tr>
-              </thead>
-              <tbody>
-                ${COINS.map(c => {
-                  const t = state.tickers[c.symbol] || { price: 0, changePct24h: 0 };
-                  const cats = state.catalysts.filter(x => x.affectedCoins.includes(c.symbol));
-                  const avgS = cats.length ? Math.round(cats.reduce((s, x) => s + x.sentimentScore, 0) / cats.length) : 0;
-                  const comb = Math.round(t.changePct24h * 4.5 + avgS * 0.65);
-                  const dir = comb >= 18 ? 'BULLISH BIAS' : comb <= -18 ? 'BEARISH BIAS' : 'NEUTRAL / RANGE';
-                  return `
-                    <tr>
-                      <td><strong>${c.symbol}</strong> <span style="color:#64748b">${c.name}</span></td>
-                      <td class="mono">${formatPrice(t.price)}</td>
-                      <td class="mono ${t.changePct24h >= 0 ? 'pos' : 'neg'}">${t.changePct24h >= 0 ? '+' : ''}${t.changePct24h.toFixed(2)}%</td>
-                      <td>${cats.length} articles/posts</td>
-                      <td class="mono ${avgS > 5 ? 'pos' : avgS < -5 ? 'neg' : ''}">${avgS > 0 ? '+' : ''}${avgS}</td>
-                      <td><span class="sent-badge ${comb >= 18 ? 'bull' : comb <= -18 ? 'bear' : 'neutral'}">${dir}</span></td>
-                      <td><button class="tf-btn active" data-radar-coin="${c.symbol}">Inspect Chart & Thesis ▸</button></td>
-                    </tr>
-                  `;
-                }).join('')}
-              </tbody>
-            </table>
-          </div>
-        </main>
-      `;
-    } else if (state.activeTab === 'INTERNET') {
-      mainViewHTML = `<main class="full-tab-view">${renderInternetScannerHTML()}</main>`;
-    } else {
-      mainViewHTML = `<main class="full-tab-view">${renderPaperTraderHTML(pred, livePrice)}</main>`;
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function bindSearchForm() {
+    const searchForm = document.getElementById('rk-web-search-form');
+    if (searchForm) {
+      searchForm.onsubmit = (e) => {
+        e.preventDefault();
+        const inp = document.getElementById('rk-web-search-input');
+        state.searchQuery = inp ? inp.value : '';
+        scanInternetFeeds(state.searchQuery);
+      };
     }
+  }
+
+  function bindPaperInputs() {
+    const slInp = document.getElementById('rk-sl-input');
+    if (slInp) slInp.oninput = (e) => { state.paperStopLoss = e.target.value; };
+    const tpInp = document.getElementById('rk-tp-input');
+    if (tpInp) tpInp.oninput = (e) => { state.paperTakeProfit = e.target.value; };
+
+    const editSlInp = document.getElementById('rk-edit-sl-input');
+    if (editSlInp) editSlInp.oninput = (e) => { state.editSlVal = e.target.value; };
+    const editTpInp = document.getElementById('rk-edit-tp-input');
+    if (editTpInp) editTpInp.oninput = (e) => { state.editTpVal = e.target.value; };
+  }
+
+  function updateTabsDOM() {
+    const tab = state.activeTab;
+    const navBtns = document.querySelectorAll('.main-nav .nav-btn');
+    for (let i = 0; i < navBtns.length; i++) {
+      navBtns[i].classList.toggle('active', navBtns[i].dataset.tab === tab);
+    }
+    const dash = document.getElementById('view-dashboard');
+    const radar = document.getElementById('view-radar');
+    const internet = document.getElementById('view-internet');
+    const paper = document.getElementById('view-paper');
+
+    if (dash) dash.style.display = (tab === 'DASHBOARD' ? 'grid' : 'none');
+    if (radar) radar.style.display = (tab === 'RADAR' ? 'block' : 'none');
+    if (internet) internet.style.display = (tab === 'INTERNET' ? 'block' : 'none');
+    if (paper) paper.style.display = (tab === 'PAPER' ? 'block' : 'none');
+  }
+
+  function updateWatchlistSelection() {
+    const items = document.querySelectorAll('.watch-item');
+    for (let i = 0; i < items.length; i++) {
+      items[i].classList.toggle('selected', items[i].dataset.watchCoin === state.selectedSymbol);
+    }
+  }
+
+  function updateNavCounters(openCount) {
+    const paperBtn = document.querySelector('.main-nav [data-tab="PAPER"]');
+    if (paperBtn) paperBtn.textContent = '⚡ Paper Trader (' + openCount + ')';
+    const netBtn = document.querySelector('.main-nav [data-tab="INTERNET"]');
+    if (netBtn) netBtn.textContent = '🌐 Internet Catalyst Scanner (' + state.catalysts.length + ')';
+  }
+
+  function initAppShellOnce() {
+    const root = document.getElementById('root');
+    if (!root || document.getElementById('view-dashboard')) return;
+
+    const { pred, livePrice } = getActivePrediction();
+    const openCount = state.positions.filter(p => !p.closedAt).length;
 
     root.innerHTML = `
       <div class="app-shell">
@@ -3322,10 +3377,10 @@ input {
           </div>
 
           <nav class="main-nav">
-            <button class="nav-btn ${state.activeTab === 'DASHBOARD' ? 'active' : ''}" data-tab="DASHBOARD">◈ Command Dashboard</button>
-            <button class="nav-btn ${state.activeTab === 'RADAR' ? 'active' : ''}" data-tab="RADAR">◎ Market Opportunity Radar</button>
-            <button class="nav-btn ${state.activeTab === 'INTERNET' ? 'active' : ''}" data-tab="INTERNET">🌐 Internet Catalyst Scanner (${state.catalysts.length})</button>
-            <button class="nav-btn ${state.activeTab === 'PAPER' ? 'active' : ''}" data-tab="PAPER">⚡ Paper Trader (${openCount})</button>
+            <button type="button" class="nav-btn ${state.activeTab === 'DASHBOARD' ? 'active' : ''}" data-tab="DASHBOARD">◈ Command Dashboard</button>
+            <button type="button" class="nav-btn ${state.activeTab === 'RADAR' ? 'active' : ''}" data-tab="RADAR">◎ Market Opportunity Radar</button>
+            <button type="button" class="nav-btn ${state.activeTab === 'INTERNET' ? 'active' : ''}" data-tab="INTERNET">🌐 Internet Catalyst Scanner (${state.catalysts.length})</button>
+            <button type="button" class="nav-btn ${state.activeTab === 'PAPER' ? 'active' : ''}" data-tab="PAPER">⚡ Paper Trader (${openCount})</button>
           </nav>
 
           <div class="status-cluster">
@@ -3335,7 +3390,7 @@ input {
             </div>
             <div class="status-pill">
               <span>F&G Index:</span>
-              <strong>${state.fearGreed.value} (${escapeHtml(state.fearGreed.classification)})</strong>
+              <strong id="rk-fg-stat">${state.fearGreed.value} (${escapeHtml(state.fearGreed.classification)})</strong>
             </div>
           </div>
         </header>
@@ -3343,70 +3398,111 @@ input {
         <div class="workspace-body">
           <aside class="watchlist-sidebar">
             <div class="sidebar-header"><span>LIVE WATCHLIST (USD)</span><small>24H %</small></div>
-            <div class="watchlist-scroll">
-              ${COINS.map(coin => {
-                const t = state.tickers[coin.symbol] || { price: 0, changePct24h: 0 };
-                const isPos = t.changePct24h >= 0;
-                return `
-                  <button class="watch-item ${coin.symbol === state.selectedSymbol ? 'selected' : ''}" data-watch-coin="${coin.symbol}">
-                    <div class="watch-left">
-                      <span class="coin-badge-dot" style="background:${coin.color}"></span>
-                      <div>
-                        <div class="watch-sym">${coin.symbol}</div>
-                        <div class="watch-name">${coin.name}</div>
-                      </div>
-                    </div>
-                    <div class="watch-right">
-                      <div class="watch-price" id="watch-price-${coin.symbol}">${formatPrice(t.price)}</div>
-                      <div class="watch-chg ${isPos ? 'pos' : 'neg'}" id="watch-chg-${coin.symbol}">${isPos ? '+' : ''}${t.changePct24h.toFixed(2)}%</div>
-                    </div>
-                  </button>
-                `;
-              }).join('')}
+            <div class="watchlist-scroll" id="rk-watchlist-scroll">
+              ${renderWatchlistItemsHTML()}
             </div>
             <div class="sidebar-footer-box">
               <div class="sf-title">Good-Faith Trading Principle</div>
               <p>Signals combine 5 transparent pillars: EMA/VWAP Trend, RSI/MACD Momentum, Orderflow Delta, Live Web News, and Macro Regime. Never risk &gt;1–2% per trade.</p>
             </div>
           </aside>
-          ${mainViewHTML}
+
+          <main id="view-dashboard" class="dashboard-grid tab-view-pane" style="display: grid;">
+            <div class="center-column">
+              <div class="coin-hero-bar" id="rk-hero-bar">
+                ${renderHeroBarHTML()}
+              </div>
+
+              <div class="chart-panel">
+                <div class="chart-toolbar" id="rk-chart-toolbar">
+                  ${renderChartToolbarHTML()}
+                </div>
+                <div class="chart-hud-bar" id="rk-chart-hud"></div>
+                <div class="tv-chart-wrapper">
+                  <div id="tv-main-container" class="tv-main-chart"></div>
+                  <div id="tv-sub-container" class="tv-sub-chart"></div>
+                </div>
+              </div>
+
+              <div id="rk-paper-box">
+                ${renderPaperTraderHTML(pred, livePrice)}
+              </div>
+            </div>
+
+            <div class="right-column">
+              <div id="rk-pred-box">
+                ${renderPredictionCardHTML(pred)}
+              </div>
+              <div id="rk-scanner-box">
+                ${renderInternetScannerHTML()}
+              </div>
+            </div>
+          </main>
+
+          <main id="view-radar" class="full-tab-view tab-view-pane" style="display: none;"></main>
+          <main id="view-internet" class="full-tab-view tab-view-pane" style="display: none;"></main>
+          <main id="view-paper" class="full-tab-view tab-view-pane" style="display: none;"></main>
         </div>
       </div>
     `;
+  }
 
+  function renderAll() {
+    initAppShellOnce();
+
+    const { tech, pred, livePrice } = getActivePrediction();
+    const openCount = state.positions.filter(p => !p.closedAt).length;
+
+    // 1. Update Tab views
+    updateTabsDOM();
+
+    // 2. Update dynamic panels
+    const heroBar = document.getElementById('rk-hero-bar');
+    if (heroBar) heroBar.innerHTML = renderHeroBarHTML();
+
+    const chartToolbar = document.getElementById('rk-chart-toolbar');
+    if (chartToolbar) chartToolbar.innerHTML = renderChartToolbarHTML();
+
+    const paperBox = document.getElementById('rk-paper-box');
+    if (paperBox) paperBox.innerHTML = renderPaperTraderHTML(pred, livePrice);
+
+    const predBox = document.getElementById('rk-pred-box');
+    if (predBox) predBox.innerHTML = renderPredictionCardHTML(pred);
+
+    const scannerBox = document.getElementById('rk-scanner-box');
+    if (scannerBox) scannerBox.innerHTML = renderInternetScannerHTML();
+
+    if (state.activeTab === 'RADAR') {
+      const radarView = document.getElementById('view-radar');
+      if (radarView) radarView.innerHTML = renderRadarHTML();
+    } else if (state.activeTab === 'INTERNET') {
+      const internetView = document.getElementById('view-internet');
+      if (internetView) internetView.innerHTML = renderInternetScannerHTML();
+    } else if (state.activeTab === 'PAPER') {
+      const paperView = document.getElementById('view-paper');
+      if (paperView) paperView.innerHTML = renderPaperTraderHTML(pred, livePrice);
+    }
+
+    // 3. Update Watchlist selection
+    updateWatchlistSelection();
+
+    // 4. Update Top Bar Nav counter
+    updateNavCounters(openCount);
+
+    // 5. Update TradingView Charts
     if (state.activeTab === 'DASHBOARD') {
       initOrUpdateTradingView(tech, pred);
-    } else {
-      // Clear chart instances when leaving dashboard so they recreate properly
-      tvState.mainChart = null;
-      tvState.subChart = null;
     }
 
-    const searchForm = document.getElementById('rk-web-search-form');
-    if (searchForm) {
-      searchForm.onsubmit = (e) => {
-        e.preventDefault();
-        const inp = document.getElementById('rk-web-search-input');
-        state.searchQuery = inp ? inp.value : '';
-        scanInternetFeeds(state.searchQuery);
-      };
-    }
-
-    const slInp = document.getElementById('rk-sl-input');
-    if (slInp) slInp.oninput = (e) => { state.paperStopLoss = e.target.value; };
-    const tpInp = document.getElementById('rk-tp-input');
-    if (tpInp) tpInp.oninput = (e) => { state.paperTakeProfit = e.target.value; };
-
-    const editSlInp = document.getElementById('rk-edit-sl-input');
-    if (editSlInp) editSlInp.oninput = (e) => { state.editSlVal = e.target.value; };
-    const editTpInp = document.getElementById('rk-edit-tp-input');
-    if (editTpInp) editTpInp.oninput = (e) => { state.editTpVal = e.target.value; };
+    bindSearchForm();
+    bindPaperInputs();
   }
 
   // Global Event Delegation
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
+    e.preventDefault();
 
     if (btn.dataset.tab) {
       state.activeTab = btn.dataset.tab;
@@ -3444,8 +3540,6 @@ input {
       if (t === 'vwap') state.chartShowVWAP = !state.chartShowVWAP;
       if (t === 'targets') state.chartShowTargets = !state.chartShowTargets;
       if (t === 'subpane') state.chartSubPane = state.chartSubPane === 'RSI' ? 'MACD' : 'RSI';
-      const { tech, pred } = getActivePrediction();
-      initOrUpdateTradingView(tech, pred);
       renderAll();
       return;
     }
@@ -3519,7 +3613,8 @@ input {
           const v = pos.side === 'LONG' ? mark * 0.97 : mark * 1.03;
           state.editSlVal = v.toFixed(dec);
         }
-        renderAll();
+        const slInp = document.getElementById('rk-edit-sl-input');
+        if (slInp) slInp.value = state.editSlVal;
       }
       return;
     }
@@ -3537,7 +3632,8 @@ input {
           const v = pos.side === 'LONG' ? mark * 1.05 : mark * 0.95;
           state.editTpVal = v.toFixed(dec);
         }
-        renderAll();
+        const tpInp = document.getElementById('rk-edit-tp-input');
+        if (tpInp) tpInp.value = state.editTpVal;
       }
       return;
     }
