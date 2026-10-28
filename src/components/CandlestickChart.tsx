@@ -127,36 +127,42 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: '',
+    });
+    volumeSeries.priceScale().applyOptions({
       scaleMargins: { top: 0.82, bottom: 0 },
     });
 
     const ema9Series = chart.addLineSeries({
       color: '#38BDF8',
-      lineWidth: 1.5,
+      lineWidth: 2,
       crosshairMarkerVisible: false,
-      title: 'EMA 9',
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
 
     const ema21Series = chart.addLineSeries({
       color: '#A855F7',
-      lineWidth: 1.5,
+      lineWidth: 2,
       crosshairMarkerVisible: false,
-      title: 'EMA 21',
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
 
     const ema50Series = chart.addLineSeries({
       color: '#F59E0B',
-      lineWidth: 1.2,
+      lineWidth: 1,
       crosshairMarkerVisible: false,
-      title: 'EMA 50',
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
 
     const vwapSeries = chart.addLineSeries({
       color: '#EAB308',
-      lineWidth: 1.5,
+      lineWidth: 2,
       lineStyle: LineStyle.Dashed,
       crosshairMarkerVisible: false,
-      title: 'VWAP',
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
 
     const bbUpperSeries = chart.addLineSeries({

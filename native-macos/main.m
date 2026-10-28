@@ -29,8 +29,22 @@
     if (![message.body isKindOfClass:[NSDictionary class]]) return;
 
     NSDictionary *body = (NSDictionary *)message.body;
-    NSString *reqId = body[@"id"];
     NSString *action = body[@"action"];
+    if ([action isEqualToString:@"log"]) {
+        NSString *msg = [NSString stringWithFormat:@"%@\n", body[@"message"] ?: @""];
+        NSString *logPath = @"/tmp/rk_webview.log";
+        if (![[NSFileManager defaultManager] fileExistsAtPath:logPath]) {
+            [msg writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        } else {
+            NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+            [fh seekToEndOfFile];
+            [fh writeData:[msg dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        }
+        return;
+    }
+
+    NSString *reqId = body[@"id"];
     NSString *urlStr = body[@"url"];
 
     if (!reqId || ![action isEqualToString:@"fetch_url"] || !urlStr) return;

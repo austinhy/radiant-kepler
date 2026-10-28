@@ -91,6 +91,21 @@ APP_JS = r"""
   // --- 2. NATIVE BRIDGE & INTERNET / MARKET FETCHING ---
   window.__RK_NATIVE_CALLBACKS__ = window.__RK_NATIVE_CALLBACKS__ || {};
 
+  function nativeLog(msg) {
+    try {
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {
+        window.webkit.messageHandlers.nativeBridge.postMessage({
+          action: 'log',
+          message: String(msg)
+        });
+      }
+    } catch (e) {}
+  }
+
+  window.onerror = function (msg, src, line, col, err) {
+    nativeLog('WINDOW_ERROR: ' + msg + ' at ' + line + ':' + col + ' ' + (err && err.stack ? err.stack : ''));
+  };
+
   async function nativeFetchText(url) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {
       const reqId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
@@ -1022,6 +1037,8 @@ APP_JS = r"""
   const tvState = {
     mainChart: null,
     subChart: null,
+    mainContainerEl: null,
+    subContainerEl: null,
     candleSeries: null,
     volumeSeries: null,
     ema9: null,
@@ -1070,10 +1087,24 @@ APP_JS = r"""
 
     const LC = window.LightweightCharts;
 
+    // If DOM container was replaced by renderAll(), reset chart instances so they mount into the live DOM
+    if (tvState.mainChart && tvState.mainContainerEl !== mainContainer) {
+      try { tvState.mainChart.remove(); } catch (e) {}
+      tvState.mainChart = null;
+      tvState.priceLines = [];
+    }
+    if (tvState.subChart && tvState.subContainerEl !== subContainer) {
+      try { tvState.subChart.remove(); } catch (e) {}
+      tvState.subChart = null;
+      tvState.rsiLine = null;
+      tvState.macdHist = null;
+    }
+
     // 1. Initialize Main Chart if needed
     if (!tvState.mainChart) {
+      tvState.mainContainerEl = mainContainer;
       tvState.mainChart = LC.createChart(mainContainer, {
-        width: mainContainer.clientWidth,
+        width: Math.max(480, mainContainer.clientWidth || 680),
         height: 380,
         layout: {
           background: { type: 'solid', color: '#090D16' },
@@ -1112,37 +1143,43 @@ APP_JS = r"""
 
       tvState.volumeSeries = tvState.mainChart.addHistogramSeries({
         priceFormat: { type: 'volume' },
-        priceScaleId: '',
+        priceScaleId: ''
+      });
+      tvState.volumeSeries.priceScale().applyOptions({
         scaleMargins: { top: 0.82, bottom: 0 }
       });
 
       tvState.ema9 = tvState.mainChart.addLineSeries({
         color: '#38BDF8',
-        lineWidth: 1.5,
+        lineWidth: 2,
         crosshairMarkerVisible: false,
-        title: 'EMA 9'
+        lastValueVisible: false,
+        priceLineVisible: false
       });
 
       tvState.ema21 = tvState.mainChart.addLineSeries({
         color: '#A855F7',
-        lineWidth: 1.5,
+        lineWidth: 2,
         crosshairMarkerVisible: false,
-        title: 'EMA 21'
+        lastValueVisible: false,
+        priceLineVisible: false
       });
 
       tvState.ema50 = tvState.mainChart.addLineSeries({
         color: '#F59E0B',
-        lineWidth: 1.2,
+        lineWidth: 1,
         crosshairMarkerVisible: false,
-        title: 'EMA 50'
+        lastValueVisible: false,
+        priceLineVisible: false
       });
 
       tvState.vwap = tvState.mainChart.addLineSeries({
         color: '#EAB308',
-        lineWidth: 1.5,
+        lineWidth: 2,
         lineStyle: LC.LineStyle.Dashed,
         crosshairMarkerVisible: false,
-        title: 'VWAP'
+        lastValueVisible: false,
+        priceLineVisible: false
       });
 
       tvState.bbUpper = tvState.mainChart.addLineSeries({
@@ -1150,7 +1187,8 @@ APP_JS = r"""
         lineWidth: 1,
         lineStyle: LC.LineStyle.Dotted,
         crosshairMarkerVisible: false,
-        title: 'BB Upper'
+        lastValueVisible: false,
+        priceLineVisible: false
       });
 
       tvState.bbLower = tvState.mainChart.addLineSeries({
@@ -1158,7 +1196,8 @@ APP_JS = r"""
         lineWidth: 1,
         lineStyle: LC.LineStyle.Dotted,
         crosshairMarkerVisible: false,
-        title: 'BB Lower'
+        lastValueVisible: false,
+        priceLineVisible: false
       });
 
       tvState.mainChart.subscribeCrosshairMove((param) => {
@@ -1189,18 +1228,13 @@ APP_JS = r"""
           updateHUDBar();
         }
       });
-
-      window.addEventListener('resize', () => {
-        if (mainContainer && tvState.mainChart) {
-          tvState.mainChart.applyOptions({ width: mainContainer.clientWidth });
-        }
-      });
     }
 
     // 2. Initialize Sub Chart if needed
     if (!tvState.subChart) {
+      tvState.subContainerEl = subContainer;
       tvState.subChart = LC.createChart(subContainer, {
-        width: subContainer.clientWidth,
+        width: Math.max(480, subContainer.clientWidth || 680),
         height: 105,
         layout: {
           background: { type: 'solid', color: '#070A12' },
@@ -1230,12 +1264,6 @@ APP_JS = r"""
       });
       tvState.subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (tvState.mainChart && range) tvState.mainChart.timeScale().setVisibleLogicalRange(range);
-      });
-
-      window.addEventListener('resize', () => {
-        if (subContainer && tvState.subChart) {
-          tvState.subChart.applyOptions({ width: subContainer.clientWidth });
-        }
       });
     }
 
@@ -1285,7 +1313,7 @@ APP_JS = r"""
 
     // AI Prediction Price Lines
     for (let i = 0; i < tvState.priceLines.length; i++) {
-      tvState.candleSeries.removePriceLine(tvState.priceLines[i]);
+      try { tvState.candleSeries.removePriceLine(tvState.priceLines[i]); } catch (e) {}
     }
     tvState.priceLines = [];
 
@@ -1293,7 +1321,7 @@ APP_JS = r"""
       const tp1 = tvState.candleSeries.createPriceLine({
         price: prediction.takeProfit1,
         color: '#10B981',
-        lineWidth: 1.5,
+        lineWidth: 2,
         lineStyle: LC.LineStyle.Dashed,
         axisLabelVisible: true,
         title: 'TP1 (' + (prediction.expectedMovePct > 0 ? '+' : '') + prediction.expectedMovePct + '%)'
@@ -1301,7 +1329,7 @@ APP_JS = r"""
       const sl = tvState.candleSeries.createPriceLine({
         price: prediction.stopLoss,
         color: '#F43F5E',
-        lineWidth: 1.5,
+        lineWidth: 2,
         lineStyle: LC.LineStyle.Dashed,
         axisLabelVisible: true,
         title: 'STOP / INVALIDATION'
@@ -1319,18 +1347,18 @@ APP_JS = r"""
 
     // 4. Update Sub-Chart (RSI or MACD)
     if (tvState.rsiLine) {
-      tvState.subChart.removeSeries(tvState.rsiLine);
+      try { tvState.subChart.removeSeries(tvState.rsiLine); } catch (e) {}
       tvState.rsiLine = null;
     }
     if (tvState.macdHist) {
-      tvState.subChart.removeSeries(tvState.macdHist);
+      try { tvState.subChart.removeSeries(tvState.macdHist); } catch (e) {}
       tvState.macdHist = null;
     }
 
     if (state.chartSubPane === 'RSI') {
       tvState.rsiLine = tvState.subChart.addLineSeries({
         color: '#38BDF8',
-        lineWidth: 1.5,
+        lineWidth: 2,
         title: 'RSI (14)'
       });
       tvState.rsiLine.createPriceLine({
@@ -1387,6 +1415,7 @@ APP_JS = r"""
       vwap: tech.vwap
     };
     updateHUDBar();
+    nativeLog('CHART_OK: candles=' + uniqueCandles.length + ' canvases=' + mainContainer.querySelectorAll('canvas').length + ' w=' + mainContainer.clientWidth + ' h=' + mainContainer.clientHeight);
   }
 
   function updateFastDOMOnTick(sym) {
