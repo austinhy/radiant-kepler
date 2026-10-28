@@ -708,6 +708,9 @@ APP_JS = r"""
     paperRiskPct: 1.0,
     paperStopLoss: '',
     paperTakeProfit: '',
+    editingPosId: null,
+    editSlVal: '',
+    editTpVal: '',
     cashBalance: parseFloat(localStorage.getItem('rk_cash_balance') || '100000'),
     positions: JSON.parse(localStorage.getItem('rk_paper_positions') || '[]')
   };
@@ -1379,6 +1382,28 @@ APP_JS = r"""
       tvState.priceLines = [tp1, sl, tp2];
     }
 
+    // Active position target lines
+    const activePos = state.positions.find(p => p.symbol === state.selectedSymbol && !p.closedAt);
+    if (activePos && tvState.candleSeries) {
+      const posSl = tvState.candleSeries.createPriceLine({
+        price: activePos.stopLoss,
+        color: '#EF4444',
+        lineWidth: 2,
+        lineStyle: LC.LineStyle.Solid,
+        axisLabelVisible: true,
+        title: 'POS SL (' + formatPrice(activePos.stopLoss) + ')'
+      });
+      const posTp = tvState.candleSeries.createPriceLine({
+        price: activePos.takeProfit,
+        color: '#10B981',
+        lineWidth: 2,
+        lineStyle: LC.LineStyle.Solid,
+        axisLabelVisible: true,
+        title: 'POS TP (' + formatPrice(activePos.takeProfit) + ')'
+      });
+      tvState.priceLines.push(posSl, posTp);
+    }
+
     // 4. Update Sub-Chart (RSI or MACD)
     if (tvState.rsiLine) {
       try { tvState.subChart.removeSeries(tvState.rsiLine); } catch (e) {}
@@ -1782,6 +1807,7 @@ APP_JS = r"""
                 const diff = pos.side === 'LONG' ? mark - pos.entryPrice : pos.entryPrice - mark;
                 const pnlUsd = diff * pos.sizeCoins;
                 const pnlPct = (pnlUsd / Math.max(pos.notionalUsd, 1)) * 100;
+                const isEditing = state.editingPosId === pos.id;
                 return `
                   <div class="position-row">
                     <div class="pos-main">
@@ -1797,9 +1823,37 @@ APP_JS = r"""
                     </div>
                     <div class="pos-pnl-col">
                       <strong class="${pnlUsd >= 0 ? 'pos' : 'neg'}">${pnlUsd >= 0 ? '+' : ''}${formatPrice(pnlUsd)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</strong>
+                      <button class="modify-sl-tp-btn" data-modify-pos="${pos.id}">Modify SL/TP</button>
                       <button class="close-pos-btn" data-close-pos="${pos.id}">Close @ Market</button>
                     </div>
                   </div>
+                  ${isEditing ? `
+                    <div class="pos-edit-box">
+                      <div class="pos-edit-row">
+                        <div class="pos-edit-field">
+                          <label>Adjust Stop Loss ($)</label>
+                          <input type="number" step="any" id="rk-edit-sl-input" value="${state.editSlVal}" />
+                          <div class="pos-edit-pills">
+                            <button type="button" class="pos-quick-pill" data-pill-sl="be" data-pos-id="${pos.id}">Break-Even (${formatPrice(pos.entryPrice)})</button>
+                            <button type="button" class="pos-quick-pill" data-pill-sl="neg15" data-pos-id="${pos.id}">-1.5% Mark</button>
+                            <button type="button" class="pos-quick-pill" data-pill-sl="neg30" data-pos-id="${pos.id}">-3.0% Mark</button>
+                          </div>
+                        </div>
+                        <div class="pos-edit-field">
+                          <label>Adjust Take Profit ($)</label>
+                          <input type="number" step="any" id="rk-edit-tp-input" value="${state.editTpVal}" />
+                          <div class="pos-edit-pills">
+                            <button type="button" class="pos-quick-pill" data-pill-tp="pos20" data-pos-id="${pos.id}">+2% Mark</button>
+                            <button type="button" class="pos-quick-pill" data-pill-tp="pos50" data-pos-id="${pos.id}">+5% Mark</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="pos-edit-actions">
+                        <button type="button" class="cancel-targets-btn" data-action="cancel-edit-pos">Cancel</button>
+                        <button type="button" class="save-targets-btn" data-action="save-edit-pos" data-pos-id="${pos.id}">Save Targets</button>
+                      </div>
+                    </div>
+                  ` : ''}
                 `;
               }).join('')}
             </div>
@@ -2010,6 +2064,11 @@ APP_JS = r"""
     if (slInp) slInp.oninput = (e) => { state.paperStopLoss = e.target.value; };
     const tpInp = document.getElementById('rk-tp-input');
     if (tpInp) tpInp.oninput = (e) => { state.paperTakeProfit = e.target.value; };
+
+    const editSlInp = document.getElementById('rk-edit-sl-input');
+    if (editSlInp) editSlInp.oninput = (e) => { state.editSlVal = e.target.value; };
+    const editTpInp = document.getElementById('rk-edit-tp-input');
+    if (editTpInp) editTpInp.oninput = (e) => { state.editTpVal = e.target.value; };
   }
 
   // Global Event Delegation
@@ -2100,6 +2159,56 @@ APP_JS = r"""
       renderAll();
       return;
     }
+    if (btn.dataset.modifyPos) {
+      const id = btn.dataset.modifyPos;
+      const pos = state.positions.find(p => p.id === id);
+      if (pos) {
+        state.editingPosId = (state.editingPosId === id ? null : id);
+        const dec = pos.entryPrice >= 10 ? 2 : 4;
+        state.editSlVal = pos.stopLoss.toFixed(dec);
+        state.editTpVal = pos.takeProfit.toFixed(dec);
+        renderAll();
+      }
+      return;
+    }
+    if (btn.dataset.pillSl) {
+      const id = btn.dataset.posId;
+      const pos = state.positions.find(p => p.id === id);
+      if (pos) {
+        const mark = (state.tickers[pos.symbol] && state.tickers[pos.symbol].price) || pos.entryPrice;
+        const dec = pos.entryPrice >= 10 ? 2 : 4;
+        const type = btn.dataset.pillSl;
+        if (type === 'be') {
+          state.editSlVal = pos.entryPrice.toFixed(dec);
+        } else if (type === 'neg15') {
+          const v = pos.side === 'LONG' ? mark * 0.985 : mark * 1.015;
+          state.editSlVal = v.toFixed(dec);
+        } else if (type === 'neg30') {
+          const v = pos.side === 'LONG' ? mark * 0.97 : mark * 1.03;
+          state.editSlVal = v.toFixed(dec);
+        }
+        renderAll();
+      }
+      return;
+    }
+    if (btn.dataset.pillTp) {
+      const id = btn.dataset.posId;
+      const pos = state.positions.find(p => p.id === id);
+      if (pos) {
+        const mark = (state.tickers[pos.symbol] && state.tickers[pos.symbol].price) || pos.entryPrice;
+        const dec = pos.entryPrice >= 10 ? 2 : 4;
+        const type = btn.dataset.pillTp;
+        if (type === 'pos20') {
+          const v = pos.side === 'LONG' ? mark * 1.02 : mark * 0.98;
+          state.editTpVal = v.toFixed(dec);
+        } else if (type === 'pos50') {
+          const v = pos.side === 'LONG' ? mark * 1.05 : mark * 0.95;
+          state.editTpVal = v.toFixed(dec);
+        }
+        renderAll();
+      }
+      return;
+    }
     if (btn.dataset.closePos) {
       const id = btn.dataset.closePos;
       for (let i = 0; i < state.positions.length; i++) {
@@ -2154,6 +2263,23 @@ APP_JS = r"""
           openedAt: Date.now()
         });
         savePaperState();
+        renderAll();
+      }
+    } else if (action === 'cancel-edit-pos') {
+      state.editingPosId = null;
+      renderAll();
+    } else if (action === 'save-edit-pos') {
+      const id = btn.dataset.posId;
+      const pos = state.positions.find(p => p.id === id);
+      const sl = parseFloat(state.editSlVal);
+      const tp = parseFloat(state.editTpVal);
+      if (pos && Number.isFinite(sl) && Number.isFinite(tp) && sl > 0 && tp > 0) {
+        pos.stopLoss = sl;
+        pos.takeProfit = tp;
+        state.editingPosId = null;
+        savePaperState();
+        const { tech, pred } = getActivePrediction();
+        initOrUpdateTradingView(tech, pred);
         renderAll();
       }
     }

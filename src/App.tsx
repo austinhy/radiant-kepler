@@ -461,6 +461,22 @@ export const App: React.FC = () => {
     [tickers]
   );
 
+  const handleUpdatePositionTargets = useCallback(
+    (id: string, stopLoss: number, takeProfit: number) => {
+      setPositions((prev) =>
+        prev.map((pos) => {
+          if (pos.id !== id || pos.closedAt) return pos;
+          return {
+            ...pos,
+            stopLoss,
+            takeProfit,
+          };
+        })
+      );
+    },
+    []
+  );
+
   const handleQuickSimulateSignal = useCallback(
     (sig: PredictionSignal) => {
       const side = sig.compositeScore >= 0 ? 'LONG' : 'SHORT';
@@ -693,6 +709,7 @@ export const App: React.FC = () => {
                 cashBalance={cashBalance}
                 onOpenPosition={handleOpenPaperPosition}
                 onClosePosition={handleClosePaperPosition}
+                onUpdatePositionTargets={handleUpdatePositionTargets}
                 onResetAccount={() => {
                   setCashBalance(100000);
                   setPositions([]);
@@ -853,6 +870,7 @@ export const App: React.FC = () => {
               cashBalance={cashBalance}
               onOpenPosition={handleOpenPaperPosition}
               onClosePosition={handleClosePaperPosition}
+              onUpdatePositionTargets={handleUpdatePositionTargets}
               onResetAccount={() => {
                 setCashBalance(100000);
                 setPositions([]);

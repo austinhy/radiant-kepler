@@ -15,6 +15,7 @@ interface PaperTraderProps {
   cashBalance: number;
   onOpenPosition: (pos: Omit<PaperPosition, 'id' | 'openedAt'>) => void;
   onClosePosition: (id: string, reason?: 'MANUAL') => void;
+  onUpdatePositionTargets?: (id: string, stopLoss: number, takeProfit: number) => void;
   onResetAccount: () => void;
 }
 
@@ -26,6 +27,7 @@ export const PaperTrader: React.FC<PaperTraderProps> = ({
   cashBalance,
   onOpenPosition,
   onClosePosition,
+  onUpdatePositionTargets,
   onResetAccount,
 }) => {
   const livePrice =
@@ -41,6 +43,10 @@ export const PaperTrader: React.FC<PaperTraderProps> = ({
   const [takeProfitInput, setTakeProfitInput] = useState<string>(
     prediction.takeProfit1.toFixed(livePrice >= 10 ? 2 : 4)
   );
+
+  const [editingPosId, setEditingPosId] = useState<string | null>(null);
+  const [editSlInput, setEditSlInput] = useState<string>('');
+  const [editTpInput, setEditTpInput] = useState<string>('');
 
   // Sync defaults when selectedSymbol changes
   useEffect(() => {
@@ -284,8 +290,9 @@ export const PaperTrader: React.FC<PaperTraderProps> = ({
               const pnlPct = (pnlUsd / Math.max(pos.notionalUsd, 1)) * 100;
 
               return (
-                <div key={pos.id} className="position-row">
-                  <div className="pos-main">
+                <React.Fragment key={pos.id}>
+                  <div className="position-row">
+                    <div className="pos-main">
                     <span
                       className={`pos-badge ${
                         pos.side === 'LONG' ? 'long' : 'short'
@@ -311,6 +318,17 @@ export const PaperTrader: React.FC<PaperTraderProps> = ({
                       {pnlPct.toFixed(2)}%)
                     </strong>
                     <button
+                      className="modify-sl-tp-btn"
+                      onClick={() => {
+                        setEditingPosId(pos.id);
+                        const dec = pos.entryPrice >= 10 ? 2 : 4;
+                        setEditSlInput(pos.stopLoss.toFixed(dec));
+                        setEditTpInput(pos.takeProfit.toFixed(dec));
+                      }}
+                    >
+                      Modify SL/TP
+                    </button>
+                    <button
                       className="close-pos-btn"
                       onClick={() => onClosePosition(pos.id, 'MANUAL')}
                     >
@@ -318,6 +336,112 @@ export const PaperTrader: React.FC<PaperTraderProps> = ({
                     </button>
                   </div>
                 </div>
+                {editingPosId === pos.id && (
+                  <div className="pos-edit-box">
+                    <div className="pos-edit-row">
+                      <div className="pos-edit-field">
+                        <label>Adjust Stop Loss ($)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={editSlInput}
+                          onChange={(e) => setEditSlInput(e.target.value)}
+                        />
+                        <div className="pos-edit-pills">
+                          <button
+                            type="button"
+                            className="pos-quick-pill"
+                            onClick={() => {
+                              const dec = pos.entryPrice >= 10 ? 2 : 4;
+                              setEditSlInput(pos.entryPrice.toFixed(dec));
+                            }}
+                          >
+                            Break-Even ({formatPrice(pos.entryPrice)})
+                          </button>
+                          <button
+                            type="button"
+                            className="pos-quick-pill"
+                            onClick={() => {
+                              const dec = pos.entryPrice >= 10 ? 2 : 4;
+                              const val = pos.side === 'LONG' ? mark * 0.985 : mark * 1.015;
+                              setEditSlInput(val.toFixed(dec));
+                            }}
+                          >
+                            -1.5% Mark
+                          </button>
+                          <button
+                            type="button"
+                            className="pos-quick-pill"
+                            onClick={() => {
+                              const dec = pos.entryPrice >= 10 ? 2 : 4;
+                              const val = pos.side === 'LONG' ? mark * 0.97 : mark * 1.03;
+                              setEditSlInput(val.toFixed(dec));
+                            }}
+                          >
+                            -3.0% Mark
+                          </button>
+                        </div>
+                      </div>
+                      <div className="pos-edit-field">
+                        <label>Adjust Take Profit ($)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={editTpInput}
+                          onChange={(e) => setEditTpInput(e.target.value)}
+                        />
+                        <div className="pos-edit-pills">
+                          <button
+                            type="button"
+                            className="pos-quick-pill"
+                            onClick={() => {
+                              const dec = pos.entryPrice >= 10 ? 2 : 4;
+                              const val = pos.side === 'LONG' ? mark * 1.02 : mark * 0.98;
+                              setEditTpInput(val.toFixed(dec));
+                            }}
+                          >
+                            +2% Mark
+                          </button>
+                          <button
+                            type="button"
+                            className="pos-quick-pill"
+                            onClick={() => {
+                              const dec = pos.entryPrice >= 10 ? 2 : 4;
+                              const val = pos.side === 'LONG' ? mark * 1.05 : mark * 0.95;
+                              setEditTpInput(val.toFixed(dec));
+                            }}
+                          >
+                            +5% Mark
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="pos-edit-actions">
+                      <button
+                        type="button"
+                        className="cancel-targets-btn"
+                        onClick={() => setEditingPosId(null)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="save-targets-btn"
+                        onClick={() => {
+                          const sl = parseFloat(editSlInput);
+                          const tp = parseFloat(editTpInput);
+                          if (Number.isFinite(sl) && Number.isFinite(tp) && sl > 0 && tp > 0) {
+                            onUpdatePositionTargets?.(pos.id, sl, tp);
+                            setEditingPosId(null);
+                          }
+                        }}
+                      >
+                        Save Targets
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </React.Fragment>
               );
             })}
           </div>
