@@ -272,6 +272,7 @@ input {
 .watch-price {
   font-weight: 600;
   font-size: 12.5px;
+  transition: color 0.3s ease;
 }
 
 .watch-chg {
@@ -2101,54 +2102,88 @@ input {
     renderAll();
   }
 
-  // --- 7. WEBSOCKET REAL-TIME TICK STREAM ---
-  function handleLiveTick(sym, price, open24, high24, low24, vol24) {
+  // --- 7. WEBSOCKET REAL-TIME TICK STREAM (500ms THROTTLED) ---
+  const tickBuffer = {};
+  let totalRawTicks = 0;
+
+  function handleIncomingTick(sym, price, open24, high24, low24, vol24) {
     if (!Number.isFinite(price) || price <= 0) return;
+    totalRawTicks++;
+    tickBuffer[sym] = { price, open24, high24, low24, vol24, time: Date.now() };
+  }
+
+  function flushTickBuffer() {
+    const syms = Object.keys(tickBuffer);
+    if (syms.length === 0) return;
+
     state.ticksCount++;
-    const cur = state.tickers[sym];
-    if (cur) {
-      const baseOpen = open24 || (cur.price - cur.change24h) || price;
-      const change24h = price - baseOpen;
-      const changePct24h = baseOpen > 0 ? (change24h / baseOpen) * 100 : 0;
-      cur.price = price;
-      cur.change24h = change24h;
-      cur.changePct24h = changePct24h;
-      if (high24) cur.high24h = high24;
-      else if (price > cur.high24h) cur.high24h = price;
-      if (low24) cur.low24h = low24;
-      else if (cur.low24h > 0 && price < cur.low24h) cur.low24h = price;
-      if (vol24 !== undefined) cur.volume24h = vol24;
-      cur.lastUpdated = Date.now();
+    let activeSymbolUpdated = false;
+
+    for (let i = 0; i < syms.length; i++) {
+      const sym = syms[i];
+      const data = tickBuffer[sym];
+      delete tickBuffer[sym];
+
+      const cur = state.tickers[sym];
+      if (cur) {
+        const baseOpen = data.open24 || (cur.price - cur.change24h) || data.price;
+        const change24h = data.price - baseOpen;
+        const changePct24h = baseOpen > 0 ? (change24h / baseOpen) * 100 : 0;
+        cur.price = data.price;
+        cur.change24h = change24h;
+        cur.changePct24h = changePct24h;
+        if (data.high24) cur.high24h = data.high24;
+        else if (data.price > cur.high24h) cur.high24h = data.price;
+        if (data.low24) cur.low24h = data.low24;
+        else if (cur.low24h > 0 && data.price < cur.low24h) cur.low24h = data.price;
+        if (data.vol24 !== undefined) cur.volume24h = data.vol24;
+        cur.lastUpdated = Date.now();
+      }
+
+      updateFastDOMOnTick(sym);
+
+      if (sym === state.selectedSymbol && state.candles.length > 0) {
+        activeSymbolUpdated = true;
+        const last = state.candles[state.candles.length - 1];
+        last.close = data.price;
+        if (data.price > last.high) last.high = data.price;
+        if (data.price < last.low) last.low = data.price;
+
+        if (tvState.candleSeries) {
+          tvState.candleSeries.update({
+            time: last.time,
+            open: last.open,
+            high: last.high,
+            low: last.low,
+            close: last.close
+          });
+        }
+        if (tvState.volumeSeries) {
+          tvState.volumeSeries.update({
+            time: last.time,
+            value: last.volume,
+            color: last.close >= last.open ? 'rgba(16, 185, 129, 0.28)' : 'rgba(244, 63, 94, 0.28)'
+          });
+        }
+      }
     }
 
-    if (sym === state.selectedSymbol && state.candles.length > 0) {
-      const last = state.candles[state.candles.length - 1];
-      last.close = price;
-      if (price > last.high) last.high = price;
-      if (price < last.low) last.low = price;
-
-      // Update TradingView candle in real-time
-      if (tvState.candleSeries) {
-        tvState.candleSeries.update({
-          time: last.time,
-          open: last.open,
-          high: last.high,
-          low: last.low,
-          close: last.close
-        });
-      }
-      if (tvState.volumeSeries) {
-        tvState.volumeSeries.update({
-          time: last.time,
-          value: last.volume,
-          color: last.close >= last.open ? 'rgba(16, 185, 129, 0.28)' : 'rgba(244, 63, 94, 0.28)'
-        });
-      }
+    if (activeSymbolUpdated && state.activeTab === 'DASHBOARD') {
+      const cur = state.tickers[state.selectedSymbol];
+      const heroPriceEl = document.getElementById('rk-hero-price');
+      if (heroPriceEl && cur) heroPriceEl.textContent = formatPrice(cur.price);
+      updateHUDBar();
     }
 
     checkPaperStopsAndTargets();
-    updateFastDOMOnTick(sym);
+
+    const tickStatusEl = document.getElementById('rk-tick-status');
+    if (tickStatusEl) {
+      tickStatusEl.textContent = 'LIVE FEED (500ms)';
+    }
   }
+
+  setInterval(flushTickBuffer, 500);
 
   function connectWebSockets() {
     try {
@@ -2168,7 +2203,7 @@ input {
             const coin = COINS.find(c => c.coinbaseProduct === msg.product_id);
             if (coin) {
               const p = parseFloat(msg.price);
-              handleLiveTick(
+              handleIncomingTick(
                 coin.symbol, p,
                 msg.open_24h ? parseFloat(msg.open_24h) : undefined,
                 msg.high_24h ? parseFloat(msg.high_24h) : undefined,
@@ -2196,7 +2231,7 @@ input {
           if (d && d.s && d.c) {
             const coin = COINS.find(c => c.binanceSymbol === d.s);
             if (coin) {
-              handleLiveTick(coin.symbol, parseFloat(d.c), parseFloat(d.o), parseFloat(d.h), parseFloat(d.l), parseFloat(d.q));
+              handleIncomingTick(coin.symbol, parseFloat(d.c), parseFloat(d.o), parseFloat(d.h), parseFloat(d.l), parseFloat(d.q));
             }
           }
         } catch (e) {}

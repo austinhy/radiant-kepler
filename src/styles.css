@@ -265,6 +265,7 @@ input {
 .watch-price {
   font-weight: 600;
   font-size: 12.5px;
+  transition: color 0.3s ease;
 }
 
 .watch-chg {

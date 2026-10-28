@@ -128,16 +128,70 @@ export const App: React.FC = () => {
     };
   }, [selectedSymbol, timeframe]);
 
-  // Live Multi-Exchange WebSocket (Coinbase Exchange + Binance Vision fallback)
+  // Live Multi-Exchange WebSocket (Coinbase Exchange + Binance Vision fallback) throttled to 500ms
   const selectedSymbolRef = useRef(selectedSymbol);
   selectedSymbolRef.current = selectedSymbol;
+  const tickBufferRef = useRef<Record<string, any>>({});
 
   useEffect(() => {
+    // 500ms batch flush timer
+    const flushTimer = setInterval(() => {
+      const buffer = tickBufferRef.current;
+      const syms = Object.keys(buffer);
+      if (syms.length === 0) return;
+
+      setTicksCount((c) => c + 1);
+
+      setTickers((prev) => {
+        const next = { ...prev };
+        for (const sym of syms) {
+          const item = buffer[sym];
+          const cur = next[sym as CoinSymbol];
+          if (!cur) continue;
+          const flash =
+            item.price > cur.price ? 'up' : item.price < cur.price ? 'down' : cur.flash;
+          const baseOpen = item.open24 || cur.price - cur.change24h || item.price;
+          const change24h = item.price - baseOpen;
+          const changePct24h = baseOpen > 0 ? (change24h / baseOpen) * 100 : 0;
+
+          next[sym as CoinSymbol] = {
+            ...cur,
+            price: item.price,
+            change24h,
+            changePct24h,
+            high24h: item.high24 || Math.max(cur.high24h, item.price),
+            low24h: item.low24 || (cur.low24h > 0 ? Math.min(cur.low24h, item.price) : item.price),
+            volume24h: item.vol24 !== undefined ? item.vol24 : cur.volume24h,
+            lastUpdated: Date.now(),
+            flash,
+          };
+        }
+        return next;
+      });
+
+      const activeSym = selectedSymbolRef.current;
+      if (buffer[activeSym]) {
+        const p = buffer[activeSym].price;
+        setCandles((prev) => {
+          if (prev.length === 0) return prev;
+          const copy = prev.slice();
+          const last = { ...copy[copy.length - 1] };
+          last.close = p;
+          if (p > last.high) last.high = p;
+          if (p < last.low) last.low = p;
+          copy[copy.length - 1] = last;
+          return copy;
+        });
+      }
+
+      tickBufferRef.current = {};
+    }, 500);
+
     let cbSocket: WebSocket | null = null;
     let binSocket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const handleLiveTick = (
+    const handleIncomingTick = (
       sym: CoinSymbol,
       price: number,
       open24h?: number,
@@ -146,47 +200,13 @@ export const App: React.FC = () => {
       vol24h?: number
     ) => {
       if (!Number.isFinite(price) || price <= 0) return;
-      setTicksCount((c) => c + 1);
-
-      setTickers((prev) => {
-        const cur = prev[sym];
-        if (!cur) return prev;
-        const flash =
-          price > cur.price ? 'up' : price < cur.price ? 'down' : cur.flash;
-        const baseOpen = open24h || cur.price - cur.change24h || price;
-        const change24h = price - baseOpen;
-        const changePct24h = baseOpen > 0 ? (change24h / baseOpen) * 100 : 0;
-
-        return {
-          ...prev,
-          [sym]: {
-            ...cur,
-            price,
-            change24h,
-            changePct24h,
-            high24h: high24h || Math.max(cur.high24h, price),
-            low24h:
-              low24h || (cur.low24h > 0 ? Math.min(cur.low24h, price) : price),
-            volume24h: vol24h !== undefined ? vol24h : cur.volume24h,
-            lastUpdated: Date.now(),
-            flash,
-          },
-        };
-      });
-
-      // Update live candle if this is the active symbol
-      if (sym === selectedSymbolRef.current) {
-        setCandles((prev) => {
-          if (prev.length === 0) return prev;
-          const copy = prev.slice();
-          const last = { ...copy[copy.length - 1] };
-          last.close = price;
-          if (price > last.high) last.high = price;
-          if (price < last.low) last.low = price;
-          copy[copy.length - 1] = last;
-          return copy;
-        });
-      }
+      tickBufferRef.current[sym] = {
+        price,
+        open24: open24h,
+        high24: high24h,
+        low24: low24h,
+        vol24: vol24h,
+      };
     };
 
     const connectWebSockets = () => {
@@ -217,7 +237,7 @@ export const App: React.FC = () => {
                 const vol24 = msg.volume_24h
                   ? parseFloat(msg.volume_24h) * p
                   : undefined;
-                handleLiveTick(coin.symbol, p, open24, high24, low24, vol24);
+                handleIncomingTick(coin.symbol, p, open24, high24, low24, vol24);
               }
             }
           } catch {
@@ -243,6 +263,39 @@ export const App: React.FC = () => {
         binSocket.onopen = () => setWsConnected(true);
         binSocket.onmessage = (event) => {
           try {
+            const payload = JSON.parse(event.data);
+            const d = payload?.data;
+            if (d && d.s && d.c) {
+              const coin = COINS.find((c) => c.binanceSymbol === d.s);
+              if (coin) {
+                handleIncomingTick(
+                  coin.symbol,
+                  parseFloat(d.c),
+                  parseFloat(d.o),
+                  parseFloat(d.h),
+                  parseFloat(d.l),
+                  parseFloat(d.q)
+                );
+              }
+            }
+          } catch {
+            // ignore
+          }
+        };
+      } catch {
+        // ignore
+      }
+    };
+
+    connectWebSockets();
+
+    return () => {
+      clearInterval(flushTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      cbSocket?.close();
+      binSocket?.close();
+    };
+  }, []);
             const payload = JSON.parse(event.data);
             const d = payload?.data;
             if (d && d.s && d.c) {
